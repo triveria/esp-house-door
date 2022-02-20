@@ -9,9 +9,15 @@
 
 #include <WiFi.h>
 #include <MQTT.h>
+#include "smart_door.hpp"
 
 const char ssid[] = "wer_das_liest_ist_doof";
-const char pass[] = "pass";
+const char pass[] = "asdf";
+
+
+
+SmartDoor smart_house_door("house_door");
+SmartDoor smart_appartment_door("appartment_door");
 
 WiFiClient net;
 MQTTClient client;
@@ -44,7 +50,31 @@ void messageReceived(String &topic, String &payload) {
   // unsubscribe as it may cause deadlocks when other things arrive while
   // sending and receiving acknowledgments. Instead, change a global variable,
   // or push to a queue and handle it in the loop after calling `client.loop()`.
+
+  // add mailbox callback here
+
+  SmartDoor *smart_door;
+  
+  if (topic == smart_house_door.topic()) {
+    smart_door = &smart_house_door;
+  } else if (topic == smart_appartment_door.topic()) {
+    smart_door = &smart_appartment_door;
+  }
+  smart_door->save_to_mailbox(payload);
+  smart_door->new_mail_available = true;
 }
+
+
+void process_mailbox()
+{ 
+  /*
+  if (door_open_requested) {
+    open_house_door_for_3s();
+    open_appartment_door_for_10s();
+  }
+  */
+}
+
 
 void setup() {
   Serial.begin(115200);
@@ -65,10 +95,9 @@ void loop() {
   if (!client.connected()) {
     connect();
   }
-
-  // publish a message roughly every second.
-  if (millis() - lastMillis > 1000) {
-    lastMillis = millis();
-    client.publish("/hello", "world");
+/*
+  if (mailbox_new_mail_available) {
+    process_mailbox();
   }
+*/
 }
