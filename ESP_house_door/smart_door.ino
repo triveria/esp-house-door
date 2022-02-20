@@ -8,6 +8,7 @@ SmartDoor::SmartDoor(String subscribed_topic, int pin)
 {
   _subscribed_topic = subscribed_topic;
   _pin = pin;
+  pinMode(_pin, OUTPUT);
 }
 
 
@@ -51,7 +52,7 @@ void SmartDoor::_open_door_for_n_seconds(int seconds)
 
 void SmartDoor::_open_door()
 {
-  // raise _pin
+  digitalWrite(_pin, HIGH);
 }
 
 
@@ -71,5 +72,5 @@ void SmartDoor::close_door_if_needed(unsigned long now_ms)
 
 void SmartDoor::_close_door()
 {
-  // lower _pin
+  digitalWrite(_pin, LOW);
 }
