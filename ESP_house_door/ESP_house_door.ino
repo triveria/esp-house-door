@@ -1,10 +1,8 @@
 #include <WiFi.h>
 #include <MQTT.h>
 #include "smart_door.hpp"
+#include "private_settings.hpp"
 
-const char ssid[] = "wer_das_liest_ist_doof";
-const char pass[] = "asdf";
-const char mqtt_broker_ip[] = "192.168.2.3";
 
 SmartDoor smart_house_door("house_door", 7);
 
@@ -26,7 +24,7 @@ void connect() {
     
     Serial.println("\nconnected!");
     
-    mqtt_client.subscribe("/smart_house_door");
+    mqtt_client.subscribe("smart_house_door"); // test on server: $ mosquitto_pub -t smart_house_door -m 'Hello World'
 }
 
 void messageReceived(String &topic, String &payload) {
