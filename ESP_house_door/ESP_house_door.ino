@@ -4,7 +4,7 @@
 #include "private_settings.hpp"
 
 
-SmartDoor smart_house_door("house_door", 7);
+SmartDoor smart_house_door(32);
 
 WiFiClient wifi_network;
 MQTTClient mqtt_client;
@@ -17,23 +17,21 @@ void connect() {
     }
     
     Serial.print("\nconnecting...");
-    while (!mqtt_client.connect("smart_house_door")) {
+    while (!mqtt_client.connect("house_door_ESP")) {
         Serial.print(".");
         delay(1000);
     }
     
     Serial.println("\nconnected!");
     
-    mqtt_client.subscribe("smart_house_door"); // test on server: $ mosquitto_pub -t smart_house_door -m 'Hello World'
+    mqtt_client.subscribe("smart_house_door"); // test on server: $ mosquitto_pub -t smart_house_door -m 'open'
 }
 
 void messageReceived(String &topic, String &payload) {
     Serial.println("incoming: " + topic + " - " + payload);
     
     unsigned long t = millis();
-    if (topic == smart_house_door.topic()) {
-        smart_house_door.save_to_mailbox(payload, t);
-    }
+    smart_house_door.save_to_mailbox(payload, t);
 }
 
 
@@ -58,4 +56,5 @@ void loop() {
     unsigned long now_ms = millis();
     smart_house_door.process_new_mail();
     smart_house_door.close_door_if_needed(now_ms);
+    delay(1000);
 }

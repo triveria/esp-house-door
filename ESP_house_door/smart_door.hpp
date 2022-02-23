@@ -3,8 +3,7 @@
 
 class SmartDoor {
 public:
-    SmartDoor(String subscribed_topic, int pin);
-    String topic();
+    SmartDoor(int pin);
     void save_to_mailbox(String message, unsigned long rx_time);
     void process_new_mail();
     void close_door_if_needed(unsigned long now_ms);
@@ -12,7 +11,6 @@ public:
 private:
     int _pin;
     bool _new_mail_available;
-    String _subscribed_topic;
     unsigned long _rx_time;
     String _message;
     unsigned long _closing_date;
