@@ -1,12 +1,13 @@
 #include "smart_door.hpp"
 
-SmartDoor::SmartDoor(int pin)
+SmartDoor::SmartDoor(int pin, int time_window)
     : _new_mail_available(false)
     , _rx_time(0)
     , _message("")
     , _closing_date(0)
 {
     _pin = pin;
+    _time_window = time_window;
     pinMode(_pin, OUTPUT);
 }
 
@@ -19,7 +20,14 @@ void SmartDoor::save_to_mailbox(String message, unsigned long rx_time)
 }
 
 
-void SmartDoor::process_new_mail()
+void SmartDoor::update(unsigned long now_ms)
+{
+    _process_new_mail();
+    _close_door_if_needed(now_ms);
+}
+
+
+void SmartDoor::_process_new_mail()
 {
     if (_new_mail_available == false) {
         return;
@@ -27,8 +35,7 @@ void SmartDoor::process_new_mail()
     
     if (_message == "open") {
         Serial.println("We received 'open'");
-        int n = 3; // get from message
-        _open_door_for_n_seconds(n);
+        _open_door_for_n_seconds(_time_window);
     } else {
         Serial.println("We did not receive 'open'");
     }
@@ -59,7 +66,7 @@ void SmartDoor::_set_closing_date(unsigned long closing_date)
 }
 
 
-void SmartDoor::close_door_if_needed(unsigned long now_ms)
+void SmartDoor::_close_door_if_needed(unsigned long now_ms)
 {
     if (now_ms >= _closing_date) {
         _close_door();

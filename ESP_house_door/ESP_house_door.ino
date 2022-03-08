@@ -4,7 +4,8 @@
 #include "private_settings.hpp"
 
 
-SmartDoor smart_house_door(32);
+SmartDoor smart_house_door(32, 2);
+SmartDoor smart_appartment_door(33, 15);
 
 WiFiClient wifi_network;
 MQTTClient mqtt_client;
@@ -32,6 +33,7 @@ void messageReceived(String &topic, String &payload) {
     
     unsigned long t = millis();
     smart_house_door.save_to_mailbox(payload, t);
+    smart_appartment_door.save_to_mailbox(payload, t);
 }
 
 
@@ -54,7 +56,7 @@ void loop() {
     }
     
     unsigned long now_ms = millis();
-    smart_house_door.process_new_mail();
-    smart_house_door.close_door_if_needed(now_ms);
-    delay(1000);
+    smart_house_door.update(now_ms);
+    smart_appartment_door.update(now_ms);
+    delay(100);
 }
