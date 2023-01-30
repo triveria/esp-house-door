@@ -1,3 +1,11 @@
+/**
+ * 
+ * @TODO individual topic per door
+ * @TODO set open time via message
+ * 
+ */
+
+ 
 #include <WiFi.h>
 #include <MQTT.h>
 #include "smart_door.hpp"
@@ -5,7 +13,8 @@
 
 
 SmartDoor smart_house_door(32, 2);
-SmartDoor smart_appartment_door(33, 15);
+SmartDoor smart_appartment_door(33, 30);
+
 
 WiFiClient wifi_network;
 MQTTClient mqtt_client;
