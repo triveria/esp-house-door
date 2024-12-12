@@ -115,7 +115,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(guestData, null, 2)
+                    body: JSON.stringify(guestData)
                 });
                 if (!response.ok) throw new Error('Failed to save guests');
                 console.log('Guest list saved successfully');
