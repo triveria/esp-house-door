@@ -7,6 +7,20 @@
 
 AsyncWebServer server(80);
 
+void handleRootRequest(AsyncWebServerRequest *request)
+{
+    request->send(SPIFFS, "/index.html", "text/html");
+}
+
+void handleFormSubmission(AsyncWebServerRequest *request)
+{
+    if (request->hasParam("foo", true)) {
+        String fooValue = request->getParam("foo", true)->value();
+        Serial.println("Value of foo: " + fooValue);
+    }
+    request->send(200, "text/plain", "Value received");
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -33,18 +47,10 @@ void setup()
     Serial.println(WiFi.localIP());
 
     // Serve the HTML file
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/index.html", "text/html");
-    });
+    server.on("/", HTTP_GET, handleRootRequest);
 
     // Handle form submission
-    server.on("/submit", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (request->hasParam("foo", true)) {
-            String fooValue = request->getParam("foo", true)->value();
-            Serial.println("Value of foo: " + fooValue);
-        }
-        request->send(200, "text/plain", "Value received");
-    });
+    server.on("/submit", HTTP_POST, handleFormSubmission);
 
     server.begin();
 }
