@@ -9,5 +9,5 @@ generate_prompt*.py
 build/
 
 tmp/
-
 .env
+__pycache__/
