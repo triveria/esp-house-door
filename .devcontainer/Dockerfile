@@ -2,7 +2,8 @@ FROM mcr.microsoft.com/devcontainers/universal:2-linux
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    udev
+    udev \
+    portaudio19-dev
 
 
 USER codespace
@@ -18,6 +19,7 @@ RUN pio pkg install --tool platformio/tool-mkfatfs --global
 RUN pip install tiktoken
 RUN pip install openai
 RUN pip install python-dotenv
+RUN pip install pyaudio
 RUN pio pkg install --library "mathieucarbou/ESPAsyncWebServer@^3.4.0" --global
 RUN pio pkg install --library "mathieucarbou/AsyncTCP@^3.2.15" --global
 

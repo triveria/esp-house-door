@@ -9,3 +9,5 @@ generate_prompt*.py
 build/
 
 tmp/
+
+.env

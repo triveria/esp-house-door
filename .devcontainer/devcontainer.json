@@ -16,7 +16,8 @@
 	"postCreateCommand": "sudo /lib/systemd/systemd-udevd --daemon && sudo udevadm control --reload-rules && sudo udevadm trigger",
 	// Privileged mode for accessing /dev in the container
 	"runArgs": [
-		"--privileged"
+		"--privileged",
+		"--network=host"
 	],
 	"mounts": [
 		"source=/dev,target=/dev,type=bind,consistency=consistent"
