@@ -18,11 +18,11 @@ RUN pio pkg install --tool platformio/tool-mkfatfs --global
 RUN pip install tiktoken
 RUN pip install openai
 RUN pip install python-dotenv
-RUN pio pkg install --library "mathieucarbou/ESPAsyncWebServer@^3.4.0"
-RUN pio pkg install --library "mathieucarbou/AsyncTCP@^3.2.15"
+RUN pio pkg install --library "mathieucarbou/ESPAsyncWebServer@^3.4.0" --global
+RUN pio pkg install --library "mathieucarbou/AsyncTCP@^3.2.15" --global
 
 # ESPAsyncWebServer installs AsyncTCP_RP2040W as well, which leads to compilation errors. Therefore, we need to manually uninstall it.
-RUN pio pkg uninstall --library AsyncTCP_RP2040W
+# RUN pio pkg uninstall --library AsyncTCP_RP2040W
 
 
 
