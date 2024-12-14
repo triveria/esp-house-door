@@ -11,3 +11,4 @@ build/
 tmp/
 .env
 __pycache__/
+*.log
