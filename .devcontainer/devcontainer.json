@@ -9,7 +9,9 @@
 				"mhutchie.git-graph",
 				"ms-vscode.cpptools-extension-pack",
 				"tht13.rst-vscode",
-				"platformio.platformio-ide"
+				"platformio.platformio-ide",
+				"ms-python.python",
+				"ms-python.debugpy"
 			]
 		}
 	},
