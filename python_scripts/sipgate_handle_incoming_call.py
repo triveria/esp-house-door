@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import re
 import logging
 import uuid
+import time  # Imported to allow delays
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,7 +39,8 @@ def send_response(response_message, address):
     sock.sendto(response_message.encode(), address)
 
 def handle_invite(invite_message, address):
-    """Handle an incoming INVITE request by sending a 180 Ringing response."""
+    """Handle an incoming INVITE request by sending a 180 Ringing response,
+    wait for 1 second, then send a 487 Request Terminated response."""
     logging.debug(f"Handling INVITE from {address}")
 
     # Extract necessary headers from the INVITE message
@@ -94,6 +96,24 @@ def handle_invite(invite_message, address):
     )
     send_response(ringing_response, address)
     logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
+
+    # Wait for 1 second before hanging up
+    time.sleep(1)
+
+    # Construct the 487 Request Terminated response
+    terminated_response = (
+        f"SIP/2.0 487 Request Terminated\r\n"
+        + "\r\n".join(via_headers) + "\r\n"
+        + "\r\n".join(record_route_headers) + "\r\n"
+        + f"{to_header};tag={to_tag}\r\n"
+        + f"{from_header}\r\n"
+        + f"Call-ID: {call_id}\r\n"
+        + f"CSeq: {cseq} INVITE\r\n"
+        + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
+        + f"Content-Length: 0\r\n\r\n"
+    )
+    send_response(terminated_response, address)
+    logging.info(f"Sent 487 Request Terminated for Call-ID: {call_id}")
 
 # Main loop to listen for incoming messages
 while True:
