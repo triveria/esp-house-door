@@ -1,6 +1,7 @@
 import socket
 import hashlib
 import os
+import uuid  # Import uuid for generating unique Call-IDs
 from dotenv import load_dotenv
 import random
 
@@ -34,7 +35,7 @@ def generate_branch():
     """Generate a unique branch parameter for the Via header."""
     return f"z9hG4bK{random.randint(100000, 999999)}"
 
-def send_register(cseq):
+def send_register(cseq, call_id):
     """Send a SIP REGISTER message."""
     branch = generate_branch()
     sip_message = (
@@ -43,7 +44,7 @@ def send_register(cseq):
         f"Max-Forwards: 70\r\n"
         f"To: <sip:{sip_id}@{sip_server}>\r\n"
         f"From: <sip:{sip_id}@{sip_server}>;tag=1928301774\r\n"
-        f"Call-ID: a84b4c76e66710\r\n"
+        f"Call-ID: {call_id}\r\n"  # Use unique Call-ID
         f"CSeq: {cseq} REGISTER\r\n"
         f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
         f"Expires: 3600\r\n"
@@ -53,7 +54,7 @@ def send_register(cseq):
     print(sip_message)
     sock.sendto(sip_message.encode(), (sip_server, sip_port))
 
-def handle_401(response, cseq):
+def handle_401(response, cseq, call_id):
     """Handle 401 Unauthorized response and send authenticated REGISTER."""
     print("Handling 401 Unauthorized response")
     lines = response.split("\r\n")
@@ -70,8 +71,8 @@ def handle_401(response, cseq):
         # Compute HA1, HA2, and response
         ha1 = hashlib.md5(f"{sip_id}:{realm}:{sip_password}".encode()).hexdigest()
         ha2 = hashlib.md5(f"REGISTER:sip:{sip_server}".encode()).hexdigest()
-        response = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
-        print(f"Computed HA1: {ha1}, HA2: {ha2}, response: {response}")
+        response_digest = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        print(f"Computed HA1: {ha1}, HA2: {ha2}, response: {response_digest}")
 
         # Send authenticated REGISTER
         branch = generate_branch()
@@ -81,10 +82,10 @@ def handle_401(response, cseq):
             f"Max-Forwards: 70\r\n"
             f"To: <sip:{sip_id}@{sip_server}>\r\n"
             f"From: <sip:{sip_id}@{sip_server}>;tag=1928301774\r\n"
-            f"Call-ID: a84b4c76e66710\r\n"
+            f"Call-ID: {call_id}\r\n"  # Use the same Call-ID
             f"CSeq: {cseq} REGISTER\r\n"
             f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
-            f"Authorization: Digest username=\"{sip_id}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"sip:{sip_server}\", response=\"{response}\"\r\n"
+            f"Authorization: Digest username=\"{sip_id}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"sip:{sip_server}\", response=\"{response_digest}\"\r\n"
             f"Expires: 3600\r\n"
             f"Content-Length: 0\r\n\r\n"
         )
@@ -94,9 +95,12 @@ def handle_401(response, cseq):
     else:
         print("Failed to parse WWW-Authenticate header.")
 
+# Generate a unique Call-ID for this registration
+call_id = str(uuid.uuid4())
+
 # Send initial REGISTER message
-initial_cseq = 1  # Start with a lower CSeq number
-send_register(initial_cseq)
+initial_cseq = 1  # Start with CSeq 1 for new Call-ID
+send_register(initial_cseq, call_id)
 
 # Receive the response
 response, _ = sock.recvfrom(4096)
@@ -106,7 +110,7 @@ print(response_text)
 
 # Handle 401 Unauthorized response
 if "401 Unauthorized" in response_text:
-    handle_401(response_text, initial_cseq + 1)
+    handle_401(response_text, initial_cseq + 1, call_id)
     # Receive the response to the authenticated REGISTER
     response, _ = sock.recvfrom(4096)
     response_text = response.decode()
