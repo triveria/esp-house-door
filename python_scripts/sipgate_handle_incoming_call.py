@@ -2,26 +2,31 @@ import socket
 import os
 from dotenv import load_dotenv
 import re
-# import pyaudio
-import wave
+import logging
+import uuid
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger()
+file_handler = logging.FileHandler('sip_messages.log')
+file_handler.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Retrieve SIP credentials and guest list from environment variables
+# Retrieve SIP credentials from environment variables
 sip_id = os.getenv("SIP_ID")
 sip_domain = os.getenv("SIP_DOMAIN")
-guest_list = os.getenv("TEST_GUEST", "").split(",")
 
 # Determine local IP address automatically
 def get_local_ip():
-    # Connect to an external server to determine the local IP
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(("8.8.8.8", 80))  # Google's public DNS server
         return s.getsockname()[0]
 
-local_ip = get_local_ip() # has to be
-local_port = 5060  # Port for your SIP client
+local_ip = get_local_ip()
+local_port = 5061  # Port for your SIP client
 
 # Create a UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -29,100 +34,78 @@ sock.bind((local_ip, local_port))
 
 def send_response(response_message, address):
     """Send a SIP response message."""
+    logging.debug(f"Sending response to {address}:\n{response_message}")
     sock.sendto(response_message.encode(), address)
 
 def handle_invite(invite_message, address):
-    """Handle an incoming INVITE request."""
-    # Extract phone number from the INVITE message
-    match = re.search(r'From:.*<sip:(.*?)@', invite_message)
-    if match:
-        phone_number = match.group(1)
-        print(f"Incoming call from: {phone_number}")
+    """Handle an incoming INVITE request by sending a 180 Ringing response."""
+    logging.debug(f"Handling INVITE from {address}")
 
-        if phone_number in guest_list:
-            print("Phone number is in the guest list. Accepting call.")
+    # Extract necessary headers from the INVITE message
+    call_id_match = re.search(r'Call-ID:\s*(\S+)', invite_message, re.IGNORECASE)
+    if not call_id_match:
+        logging.error("Failed to extract Call-ID from INVITE.")
+        return
+    call_id = call_id_match.group(1)
 
-            # Send 100 Trying
-            trying_response = (
-                f"SIP/2.0 100 Trying\r\n"
-                f"Via: SIP/2.0/UDP {local_ip}:{local_port};branch=z9hG4bK776asdhds\r\n"
-                f"To: <sip:{sip_id}@{sip_domain}>\r\n"
-                f"From: <sip:{phone_number}@{sip_domain}>\r\n"
-                f"Call-ID: a84b4c76e66710\r\n"
-                f"CSeq: 103 INVITE\r\n"
-                f"Content-Length: 0\r\n\r\n"
-            )
-            send_response(trying_response, address)
+    cseq_match = re.search(r'CSeq:\s*(\d+)\s+INVITE', invite_message, re.IGNORECASE)
+    if not cseq_match:
+        logging.error("Failed to extract CSeq from INVITE.")
+        return
+    cseq = cseq_match.group(1)
 
-            # Send 180 Ringing
-            ringing_response = (
-                f"SIP/2.0 180 Ringing\r\n"
-                f"Via: SIP/2.0/UDP {local_ip}:{local_port};branch=z9hG4bK776asdhds\r\n"
-                f"To: <sip:{sip_id}@{sip_domain}>\r\n"
-                f"From: <sip:{phone_number}@{sip_domain}>\r\n"
-                f"Call-ID: a84b4c76e66710\r\n"
-                f"CSeq: 103 INVITE\r\n"
-                f"Content-Length: 0\r\n\r\n"
-            )
-            send_response(ringing_response, address)
+    # Extract all Via headers
+    via_headers = re.findall(r'(Via: SIP/2.0/UDP .*?;branch=\S+)', invite_message, re.IGNORECASE)
+    if not via_headers:
+        logging.error("Failed to extract Via headers from INVITE.")
+        return
 
-            # Send 200 OK
-            ok_response = (
-                f"SIP/2.0 200 OK\r\n"
-                f"Via: SIP/2.0/UDP {local_ip}:{local_port};branch=z9hG4bK776asdhds\r\n"
-                f"To: <sip:{sip_id}@{sip_domain}>\r\n"
-                f"From: <sip:{phone_number}@{sip_domain}>\r\n"
-                f"Call-ID: a84b4c76e66710\r\n"
-                f"CSeq: 103 INVITE\r\n"
-                f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
-                f"Content-Length: 0\r\n\r\n"
-            )
-            send_response(ok_response, address)
+    # Extract all Record-Route headers
+    record_route_headers = re.findall(r'(Record-Route: <sip:.*?>)', invite_message, re.IGNORECASE)
 
-            # Play audio file to the caller
-            # play_audio_to_caller("welcome_message.wav", address)
-        else:
-            print("Phone number is not in the guest list. Ignoring call.")
+    # Extract the From header
+    from_match = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE)
+    if not from_match:
+        logging.error("Failed to extract From header from INVITE.")
+        return
+    from_header = from_match.group(1)
 
-def play_audio_to_caller(audio_file, address):
-    """Stream audio file to the caller using RTP."""
-    # Open the audio file
-    wf = wave.open(audio_file, 'rb')
+    # Extract the To header without tag
+    to_match = re.search(r'(To: <sip:.*?>)', invite_message, re.IGNORECASE)
+    if not to_match:
+        logging.error("Failed to extract To header from INVITE.")
+        return
+    to_header = to_match.group(1)
 
-    # Create a PyAudio stream
-    p = pyaudio.PyAudio()
-    stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True)
+    # Generate a unique tag for the To header
+    to_tag = uuid.uuid4().hex
 
-    # Read data from the audio file and send it over RTP
-    data = wf.readframes(1024)
-    while data:
-        stream.write(data)
-        data = wf.readframes(1024)
-
-    # Close the stream and PyAudio
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-
-def parse_sip_message(message):
-    """Parse a SIP message into a dictionary."""
-    lines = message.split("\r\n")
-    headers = {}
-    for line in lines[1:]:
-        if ": " in line:
-            key, value = line.split(": ", 1)
-            headers[key] = value
-    return headers
+    # Construct the 180 Ringing response
+    ringing_response = (
+        f"SIP/2.0 180 Ringing\r\n"
+        + "\r\n".join(via_headers) + "\r\n"
+        + "\r\n".join(record_route_headers) + "\r\n"
+        + f"{to_header};tag={to_tag}\r\n"
+        + f"{from_header}\r\n"
+        + f"Call-ID: {call_id}\r\n"
+        + f"CSeq: {cseq} INVITE\r\n"
+        + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
+        + f"Content-Length: 0\r\n\r\n"
+    )
+    send_response(ringing_response, address)
+    logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
 
 # Main loop to listen for incoming messages
 while True:
     data, addr = sock.recvfrom(4096)
-    message = data.decode()
-    print("Received message:")
-    print(message)
+    try:
+        message = data.decode()
+    except UnicodeDecodeError:
+        logging.error(f"Failed to decode message from {addr}.")
+        continue
+    logging.debug(f"Received message from {addr}:\n{message}")
 
     if message.startswith("INVITE"):
         handle_invite(message, addr)
+    else:
+        logging.info(f"Ignoring unsupported SIP method from {addr}.")
