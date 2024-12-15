@@ -5,40 +5,20 @@ import re
 import logging
 import uuid
 import time  # Imported to allow delays
+import click
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger()
-file_handler = logging.FileHandler('sip_messages.log')
-file_handler.setLevel(logging.DEBUG)
-logger.addHandler(file_handler)
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Retrieve SIP credentials from environment variables
-sip_id = os.getenv("SIP_ID")
-sip_domain = os.getenv("SIP_DOMAIN")
-
-# Determine local IP address automatically
 def get_local_ip():
+    """Determine the local IP address automatically."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect(("8.8.8.8", 80))  # Google's public DNS server
         return s.getsockname()[0]
 
-local_ip = get_local_ip()
-local_port = 5061  # Port for your SIP client
-
-# Create a UDP socket
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((local_ip, local_port))
-
-def send_response(response_message, address):
+def send_response(sock, response_message, address):
     """Send a SIP response message."""
     logging.debug(f"Sending response to {address}:\n{response_message}")
     sock.sendto(response_message.encode(), address)
 
-def handle_invite(invite_message, address):
+def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port):
     """Handle an incoming INVITE request by sending a 180 Ringing response,
     wait for 1 second, then send a 487 Request Terminated response."""
     logging.debug(f"Handling INVITE from {address}")
@@ -94,7 +74,7 @@ def handle_invite(invite_message, address):
         + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
         + f"Content-Length: 0\r\n\r\n"
     )
-    send_response(ringing_response, address)
+    send_response(sock, ringing_response, address)
     logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
 
     # Wait for 1 second before hanging up
@@ -112,20 +92,54 @@ def handle_invite(invite_message, address):
         + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
         + f"Content-Length: 0\r\n\r\n"
     )
-    send_response(terminated_response, address)
+    send_response(sock, terminated_response, address)
     logging.info(f"Sent 487 Request Terminated for Call-ID: {call_id}")
 
-# Main loop to listen for incoming messages
-while True:
-    data, addr = sock.recvfrom(4096)
-    try:
-        message = data.decode()
-    except UnicodeDecodeError:
-        logging.error(f"Failed to decode message from {addr}.")
-        continue
-    logging.debug(f"Received message from {addr}:\n{message}")
+@click.command()
+@click.option('--port', default=5060, help='Local port for the SIP client.', show_default=True)
+def main(port):
+    """Handle incoming SIP INVITE messages and respond accordingly."""
+    # Configure logging
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger()
+    file_handler = logging.FileHandler('sip_messages.log')
+    file_handler.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
 
-    if message.startswith("INVITE"):
-        handle_invite(message, addr)
-    else:
-        logging.info(f"Ignoring unsupported SIP method from {addr}.")
+    # Load environment variables from .env file
+    load_dotenv()
+
+    # Retrieve SIP credentials from environment variables
+    sip_id = os.getenv("SIP_ID")
+    sip_domain = os.getenv("SIP_DOMAIN")
+
+    if not sip_id or not sip_domain:
+        logging.error("SIP_ID and SIP_DOMAIN must be set in the environment variables.")
+        return
+
+    local_ip = get_local_ip()
+    local_port = port  # Port for your SIP client
+
+    logging.info(f"Starting SIP server on {local_ip}:{local_port}")
+
+    # Create a UDP socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind((local_ip, local_port))
+        logging.info(f"Listening for SIP messages on {local_ip}:{local_port}")
+
+        while True:
+            data, addr = sock.recvfrom(4096)
+            try:
+                message = data.decode()
+            except UnicodeDecodeError:
+                logging.error(f"Failed to decode message from {addr}.")
+                continue
+            logging.debug(f"Received message from {addr}:\n{message}")
+
+            if message.startswith("INVITE"):
+                handle_invite(sock, message, addr, sip_id, local_ip, local_port)
+            else:
+                logging.info(f"Ignoring unsupported SIP method from {addr}.")
+
+if __name__ == "__main__":
+    main()
