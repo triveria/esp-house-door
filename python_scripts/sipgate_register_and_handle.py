@@ -9,9 +9,21 @@ import time
 import re
 import threading
 import logging
+import RPi.GPIO as GPIO  # Import RPi.GPIO for GPIO control
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# GPIO pin definitions
+GPIO_PIN_20 = 20
+GPIO_PIN_21 = 21
+
+# Set the GPIO mode
+GPIO.setmode(GPIO.BCM)
+
+# Set up the GPIO pins as outputs
+GPIO.setup(GPIO_PIN_20, GPIO.OUT)
+GPIO.setup(GPIO_PIN_21, GPIO.OUT)
 
 # Determine local IP address automatically
 def get_local_ip():
@@ -95,8 +107,33 @@ def send_response(sock, response_message, address):
     sock.sendto(response_message.encode(), address)
 
 def open_doors():
-    """Dummy function to simulate opening doors."""
-    logging.info("Door is being opened...")
+    """Open both doors, wait, and then close them accordingly."""
+    try:
+        logging.info("Opening both doors...")
+        # Open both doors
+        GPIO.output(GPIO_PIN_20, GPIO.HIGH)  # Open apartment door
+        GPIO.output(GPIO_PIN_21, GPIO.HIGH)  # Open house door
+        logging.info("Both doors opened.")
+        
+        time.sleep(1)  # Wait for 1 second
+        
+        # Close house door
+        logging.info("Closing house door...")
+        GPIO.output(GPIO_PIN_21, GPIO.LOW)
+        logging.info("House door closed.")
+        
+        time.sleep(15)  # Wait for 15 seconds
+        
+        # Close apartment door
+        logging.info("Closing apartment door...")
+        GPIO.output(GPIO_PIN_20, GPIO.LOW)
+        logging.info("Apartment door closed.")
+        
+    except Exception as e:
+        logging.error(f"Error in open_doors: {e}")
+    finally:
+        # Optional: Cleanup can be handled elsewhere if needed
+        pass
 
 def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guest_list):
     """Handle an incoming INVITE request by sending a 180 Ringing response,
@@ -301,6 +338,9 @@ def main(port):
     finally:
         sock.close()
         logging.info(f"Socket on port {port} closed.")
+        GPIO.cleanup()
+        logging.info("GPIO cleanup completed.")
 
 if __name__ == '__main__':
     main()
+
