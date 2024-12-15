@@ -86,34 +86,40 @@ def handle_401(response, sock, sip_server, sip_port, local_ip, local_port, cseq,
 @click.command()
 @click.option('--port', default=5060, help='Local port for the SIP client')
 def main(port):
-    sip_password = None
     load_dotenv()
 
+    # Retrieve SIP credentials from environment variables
+    sip_id = os.getenv("SIP_ID")
+    sip_password = os.getenv("SIP_PASSWORD")
+    sip_domain = os.getenv("SIP_DOMAIN")
+
+    if not all([sip_id, sip_password, sip_domain]):
+        print("Missing SIP credentials in environment variables.")
+        return
+
+    # SIP server details
+    sip_server = sip_domain
+    sip_port = 5060  # Assuming the SIP server listens on port 5060
+
+    # Generate a unique Call-ID for this registration
+    call_id = str(uuid.uuid4())
+    print(f"Using Call-ID: {call_id}")
+
+    # Initialize CSeq
+    cseq = 1
+
+    # Determine local IP address
+    local_ip = get_local_ip()
+
     while True:
-        local_port = port
-        local_ip = get_local_ip()
-
-        # Retrieve SIP credentials from environment variables
-        sip_id = os.getenv("SIP_ID")
-        sip_password = os.getenv("SIP_PASSWORD")
-        sip_domain = os.getenv("SIP_DOMAIN")
-
-        if not all([sip_id, sip_password, sip_domain]):
-            print("Missing SIP credentials in environment variables.")
-            return
-
-        # SIP server details
-        sip_server = sip_domain
-        sip_port = 5060  # Assuming the SIP server listens on port 5060
-
-        # Create a UDP socket
         try:
+            # Create a UDP socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind((local_ip, local_port))
+            sock.bind((local_ip, port))
             sock.settimeout(10)  # Set timeout for socket operations
-            print(f"Socket bound to {local_ip}:{local_port}")
-        except OSError as e:
-            print(f"Port {local_port} is in use. Retrying in 10 seconds...")
+            print(f"Socket bound to {local_ip}:{port}")
+        except OSError:
+            print(f"Port {port} is in use. Retrying in 10 seconds...")
             time.sleep(10)
             continue
         except Exception as e:
@@ -122,12 +128,9 @@ def main(port):
             continue
 
         try:
-            # Generate a unique Call-ID for this registration
-            call_id = str(uuid.uuid4())
-
-            # Send initial REGISTER message
-            initial_cseq = 1  # Start with CSeq 1 for new Call-ID
-            send_register(sock, sip_server, sip_port, local_ip, local_port, initial_cseq, call_id, sip_id)
+            # Send REGISTER message
+            send_register(sock, sip_server, sip_port, local_ip, port, cseq, call_id, sip_id)
+            cseq += 1  # Increment CSeq after sending REGISTER
 
             # Receive the response
             try:
@@ -138,7 +141,8 @@ def main(port):
 
                 # Handle 401 Unauthorized response
                 if "401 Unauthorized" in response_text:
-                    handle_401(response_text, sock, sip_server, sip_port, local_ip, local_port, initial_cseq + 1, call_id, sip_id, sip_password)
+                    handle_401(response_text, sock, sip_server, sip_port, local_ip, port, cseq, call_id, sip_id, sip_password)
+                    cseq += 1  # Increment CSeq after sending AUTH REGISTER
 
                     # Receive the response to the authenticated REGISTER
                     try:
@@ -149,12 +153,12 @@ def main(port):
                     except socket.timeout:
                         print("No response to authenticated REGISTER received.")
             except socket.timeout:
-                print("No response received for initial REGISTER.")
+                print("No response received for REGISTER.")
             except Exception as e:
                 print(f"An error occurred while receiving response: {e}")
         finally:
             sock.close()
-            print(f"Socket on port {local_port} closed.")
+            print(f"Socket on port {port} closed.")
 
         print("Registration successful. Next registration in 5 minutes.")
         time.sleep(300)  # Wait for 5 minutes before re-registering
