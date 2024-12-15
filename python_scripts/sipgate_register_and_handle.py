@@ -9,10 +9,9 @@ import time
 import re
 import threading
 import logging
+import json  # Import json for handling guest list
+from datetime import datetime  # Import datetime for time comparisons
 import RPi.GPIO as GPIO  # Import RPi.GPIO for GPIO control
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # GPIO pin definitions
 GPIO_PIN_20 = 20
@@ -135,7 +134,7 @@ def open_doors():
         # Optional: Cleanup can be handled elsewhere if needed
         pass
 
-def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guest_list):
+def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guests):
     """Handle an incoming INVITE request by sending a 180 Ringing response,
     check if caller is on guest list, and if yes, open doors."""
     logging.info(f"Handling INVITE from {address}")
@@ -170,17 +169,37 @@ def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, g
     caller_number = from_match.group(1)
     logging.info(f"Caller Number: {caller_number}")
 
-    # Check if caller is in the guest list
-    if caller_number in guest_list:
-        logging.info(f"Caller {caller_number} is on the guest list. Opening doors.")
+    # Check if caller is in the guest list and within allowed time
+    is_guest_allowed = False
+    for guest_name, guest_info in guests.items():
+        guest_phone = re.sub(r'\D', '', guest_info.get("phone", ""))  # Remove non-digit characters
+        if caller_number == guest_phone:
+            allowed_from_str = guest_info.get("allowedFrom")
+            allowed_until_str = guest_info.get("allowedUntil")
+            if allowed_from_str and allowed_until_str:
+                try:
+                    allowed_from = datetime.fromisoformat(allowed_from_str)
+                    allowed_until = datetime.fromisoformat(allowed_until_str)
+                    current_time = datetime.now()
+                    if allowed_from <= current_time <= allowed_until:
+                        logging.info(f"Caller {caller_number} ({guest_name}) is allowed to enter.")
+                        is_guest_allowed = True
+                    else:
+                        logging.info(f"Caller {caller_number} ({guest_name}) is not within the allowed time.")
+                except ValueError as ve:
+                    logging.error(f"Invalid datetime format for guest {guest_name}: {ve}")
+            break  # Phone number matched, no need to continue
+
+    if is_guest_allowed:
+        logging.info(f"Caller {caller_number} is on the guest list and within the allowed time. Opening doors.")
         # Start a new thread to open doors
         door_thread = threading.Thread(target=open_doors, daemon=True)
         door_thread.start()
     else:
-        logging.info(f"Caller {caller_number} is not on the guest list.")
+        logging.info(f"Caller {caller_number} is not on the guest list or not within the allowed time.")
 
     # Extract the From header (full header)
-    from_header = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE).group(1)
+    from_header = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE).group(1) if re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE) else f"From: <sip:{caller_number}@unknown>;tag=unknown"
 
     # Extract the To header without tag
     to_match = re.search(r'(To: <sip:.*?>)', invite_message, re.IGNORECASE)
@@ -263,7 +282,7 @@ def registration_loop(sock, sip_server, sip_port, local_ip, local_port, call_id,
         logging.info("Registration successful. Next registration in 5 minutes.")
         time.sleep(300)  # Wait for 5 minutes before re-registering
 
-def listening_loop(sock, sip_id, local_ip, local_port, guest_list):
+def listening_loop(sock, sip_id, local_ip, local_port, guests):
     """Listen for incoming SIP messages and handle INVITE requests."""
     while True:
         try:
@@ -276,7 +295,7 @@ def listening_loop(sock, sip_id, local_ip, local_port, guest_list):
             logging.debug(f"Received message from {addr}:\n{message}")
 
             if message.startswith("INVITE"):
-                handle_invite(sock, message, addr, sip_id, local_ip, local_port, guest_list)
+                handle_invite(sock, message, addr, sip_id, local_ip, local_port, guests)
             else:
                 logging.info(f"Ignoring unsupported SIP method from {addr}.")
         except Exception as e:
@@ -284,22 +303,39 @@ def listening_loop(sock, sip_id, local_ip, local_port, guest_list):
 
 @click.command()
 @click.option('--port', default=5060, help='Local port for the SIP client', show_default=True)
-def main(port):
+@click.option('--verbose', is_flag=True, help='Enable verbose (DEBUG) logging')
+def main(port, verbose):
+    # Configure logging
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
+
     load_dotenv()
 
     # Retrieve SIP credentials from environment variables
     sip_id = os.getenv("SIP_ID")
     sip_password = os.getenv("SIP_PASSWORD")
     sip_domain = os.getenv("SIP_DOMAIN")
-    test_guest = os.getenv("TEST_GUEST", "")
 
     if not all([sip_id, sip_password, sip_domain]):
         logging.error("Missing SIP credentials in environment variables.")
         return
 
-    # Process guest list
-    guest_list = [number.strip() for number in test_guest.split(",") if number.strip()]
-    logging.info(f"Guest List: {guest_list}")
+    # Load guest list from guests.json
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    guests_path = os.path.join(script_dir, "guests.json")
+    try:
+        with open(guests_path, "r") as f:
+            guests = json.load(f)
+        logging.info(f"Loaded guests from {guests_path}")
+    except FileNotFoundError:
+        logging.error(f"guests.json not found in {script_dir}.")
+        return
+    except json.JSONDecodeError as jde:
+        logging.error(f"Error decoding guests.json: {jde}")
+        return
+    except Exception as e:
+        logging.error(f"Unexpected error loading guests.json: {e}")
+        return
 
     # SIP server details
     sip_server = sip_domain
@@ -332,7 +368,7 @@ def main(port):
 
     # Start the listening loop in the main thread
     try:
-        listening_loop(sock, sip_id, local_ip, port, guest_list)
+        listening_loop(sock, sip_id, local_ip, port, guests)
     except KeyboardInterrupt:
         logging.info("Shutting down SIP client.")
     finally:
@@ -343,4 +379,3 @@ def main(port):
 
 if __name__ == '__main__':
     main()
-
