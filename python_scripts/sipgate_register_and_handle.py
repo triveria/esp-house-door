@@ -20,9 +20,9 @@ GPIO_PIN_21 = 21
 # Set the GPIO mode
 GPIO.setmode(GPIO.BCM)
 
-# Set up the GPIO pins as outputs
-GPIO.setup(GPIO_PIN_20, GPIO.OUT)
-GPIO.setup(GPIO_PIN_21, GPIO.OUT)
+# Set up the GPIO pins as outputs with an initial low state
+GPIO.setup(GPIO_PIN_20, GPIO.OUT, initial=GPIO.LOW)
+GPIO.setup(GPIO_PIN_21, GPIO.OUT, initial=GPIO.LOW)
 
 # Determine local IP address automatically
 def get_local_ip():
@@ -227,7 +227,7 @@ def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, g
     logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
 
     # Wait for 1 second before hanging up
-    time.sleep(1)
+    # time.sleep(1)
 
     # Construct the 487 Request Terminated response
     terminated_response = (
