@@ -94,9 +94,13 @@ def send_response(sock, response_message, address):
     logging.debug(f"Sending response to {address}:\n{response_message}")
     sock.sendto(response_message.encode(), address)
 
-def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port):
+def open_doors():
+    """Dummy function to simulate opening doors."""
+    logging.info("Door is being opened...")
+
+def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guest_list):
     """Handle an incoming INVITE request by sending a 180 Ringing response,
-    wait for 1 second, then send a 487 Request Terminated response."""
+    check if caller is on guest list, and if yes, open doors."""
     logging.info(f"Handling INVITE from {address}")
 
     # Extract necessary headers from the INVITE message
@@ -122,11 +126,24 @@ def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port):
     record_route_headers = re.findall(r'(Record-Route: <sip:.*?>)', invite_message, re.IGNORECASE)
 
     # Extract the From header
-    from_match = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE)
+    from_match = re.search(r'From: .*<sip:(\d+)@[^>]+>', invite_message, re.IGNORECASE)
     if not from_match:
         logging.error("Failed to extract From header from INVITE.")
         return
-    from_header = from_match.group(1)
+    caller_number = from_match.group(1)
+    logging.info(f"Caller Number: {caller_number}")
+
+    # Check if caller is in the guest list
+    if caller_number in guest_list:
+        logging.info(f"Caller {caller_number} is on the guest list. Opening doors.")
+        # Start a new thread to open doors
+        door_thread = threading.Thread(target=open_doors, daemon=True)
+        door_thread.start()
+    else:
+        logging.info(f"Caller {caller_number} is not on the guest list.")
+
+    # Extract the From header (full header)
+    from_header = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE).group(1)
 
     # Extract the To header without tag
     to_match = re.search(r'(To: <sip:.*?>)', invite_message, re.IGNORECASE)
@@ -209,7 +226,7 @@ def registration_loop(sock, sip_server, sip_port, local_ip, local_port, call_id,
         logging.info("Registration successful. Next registration in 5 minutes.")
         time.sleep(300)  # Wait for 5 minutes before re-registering
 
-def listening_loop(sock, sip_id, local_ip, local_port):
+def listening_loop(sock, sip_id, local_ip, local_port, guest_list):
     """Listen for incoming SIP messages and handle INVITE requests."""
     while True:
         try:
@@ -222,7 +239,7 @@ def listening_loop(sock, sip_id, local_ip, local_port):
             logging.debug(f"Received message from {addr}:\n{message}")
 
             if message.startswith("INVITE"):
-                handle_invite(sock, message, addr, sip_id, local_ip, local_port)
+                handle_invite(sock, message, addr, sip_id, local_ip, local_port, guest_list)
             else:
                 logging.info(f"Ignoring unsupported SIP method from {addr}.")
         except Exception as e:
@@ -237,10 +254,15 @@ def main(port):
     sip_id = os.getenv("SIP_ID")
     sip_password = os.getenv("SIP_PASSWORD")
     sip_domain = os.getenv("SIP_DOMAIN")
+    test_guest = os.getenv("TEST_GUEST", "")
 
     if not all([sip_id, sip_password, sip_domain]):
         logging.error("Missing SIP credentials in environment variables.")
         return
+
+    # Process guest list
+    guest_list = [number.strip() for number in test_guest.split(",") if number.strip()]
+    logging.info(f"Guest List: {guest_list}")
 
     # SIP server details
     sip_server = sip_domain
@@ -273,7 +295,7 @@ def main(port):
 
     # Start the listening loop in the main thread
     try:
-        listening_loop(sock, sip_id, local_ip, port)
+        listening_loop(sock, sip_id, local_ip, port, guest_list)
     except KeyboardInterrupt:
         logging.info("Shutting down SIP client.")
     finally:
