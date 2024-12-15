@@ -4,14 +4,7 @@ import os
 import uuid  # Import uuid for generating unique Call-IDs
 from dotenv import load_dotenv
 import random
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Retrieve SIP credentials from environment variables
-sip_id = os.getenv("SIP_ID")
-sip_password = os.getenv("SIP_PASSWORD")
-sip_domain = os.getenv("SIP_DOMAIN")
+import click
 
 # Determine local IP address automatically
 def get_local_ip():
@@ -20,22 +13,11 @@ def get_local_ip():
         s.connect(("8.8.8.8", 80))  # Google's public DNS server
         return s.getsockname()[0]
 
-local_ip = get_local_ip()
-local_port = 5061  # Port for your SIP client
-
-# SIP server details
-sip_server = sip_domain
-sip_port = 5060
-
-# Create a UDP socket
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((local_ip, local_port))
-
 def generate_branch():
     """Generate a unique branch parameter for the Via header."""
     return f"z9hG4bK{random.randint(100000, 999999)}"
 
-def send_register(cseq, call_id):
+def send_register(sock, sip_server, sip_port, local_ip, local_port, cseq, call_id, sip_id):
     """Send a SIP REGISTER message."""
     branch = generate_branch()
     sip_message = (
@@ -54,7 +36,7 @@ def send_register(cseq, call_id):
     print(sip_message)
     sock.sendto(sip_message.encode(), (sip_server, sip_port))
 
-def handle_401(response, cseq, call_id):
+def handle_401(response, sock, sip_server, sip_port, local_ip, local_port, cseq, call_id, sip_id, sip_password):
     """Handle 401 Unauthorized response and send authenticated REGISTER."""
     print("Handling 401 Unauthorized response")
     lines = response.split("\r\n")
@@ -62,10 +44,11 @@ def handle_401(response, cseq, call_id):
     for line in lines:
         if line.startswith("WWW-Authenticate:"):
             parts = line.split('"')
-            realm = parts[1]
-            nonce = parts[3]
-            print(f"Extracted realm: {realm}, nonce: {nonce}")
-            break
+            if len(parts) >= 4:
+                realm = parts[1]
+                nonce = parts[3]
+                print(f"Extracted realm: {realm}, nonce: {nonce}")
+                break
 
     if realm and nonce:
         # Compute HA1, HA2, and response
@@ -95,27 +78,60 @@ def handle_401(response, cseq, call_id):
     else:
         print("Failed to parse WWW-Authenticate header.")
 
-# Generate a unique Call-ID for this registration
-call_id = str(uuid.uuid4())
+@click.command()
+@click.option('--port', default=5060, help='Local port for the SIP client')
+def main(port):
+    local_port = port
+    local_ip = get_local_ip()
 
-# Send initial REGISTER message
-initial_cseq = 1  # Start with CSeq 1 for new Call-ID
-send_register(initial_cseq, call_id)
+    # Load environment variables from .env file
+    load_dotenv()
 
-# Receive the response
-response, _ = sock.recvfrom(4096)
-response_text = response.decode()
-print("Received response:")
-print(response_text)
+    # Retrieve SIP credentials from environment variables
+    sip_id = os.getenv("SIP_ID")
+    sip_password = os.getenv("SIP_PASSWORD")
+    sip_domain = os.getenv("SIP_DOMAIN")
 
-# Handle 401 Unauthorized response
-if "401 Unauthorized" in response_text:
-    handle_401(response_text, initial_cseq + 1, call_id)
-    # Receive the response to the authenticated REGISTER
-    response, _ = sock.recvfrom(4096)
-    response_text = response.decode()
-    print("Received response:")
-    print(response_text)
+    if not all([sip_id, sip_password, sip_domain]):
+        print("Missing SIP credentials in environment variables.")
+        return
 
-# Close the socket
-sock.close()
+    # SIP server details
+    sip_server = sip_domain
+    sip_port = 5060  # Assuming the SIP server listens on port 5060
+
+    # Create a UDP socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind((local_ip, local_port))
+        sock.settimeout(10)  # Set timeout for socket operations
+
+        # Generate a unique Call-ID for this registration
+        call_id = str(uuid.uuid4())
+
+        # Send initial REGISTER message
+        initial_cseq = 1  # Start with CSeq 1 for new Call-ID
+        send_register(sock, sip_server, sip_port, local_ip, local_port, initial_cseq, call_id, sip_id)
+
+        # Receive the response
+        try:
+            response, _ = sock.recvfrom(4096)
+            response_text = response.decode()
+            print("Received response:")
+            print(response_text)
+
+            # Handle 401 Unauthorized response
+            if "401 Unauthorized" in response_text:
+                handle_401(response_text, sock, sip_server, sip_port, local_ip, local_port, initial_cseq + 1, call_id, sip_id, sip_password)
+
+                # Receive the response to the authenticated REGISTER
+                response, _ = sock.recvfrom(4096)
+                response_text = response.decode()
+                print("Received response:")
+                print(response_text)
+        except socket.timeout:
+            print("No response received.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+if __name__ == '__main__':
+    main()
