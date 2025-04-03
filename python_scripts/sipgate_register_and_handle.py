@@ -12,6 +12,8 @@ import logging
 import json  # Import json for handling guest list
 from datetime import datetime  # Import datetime for time comparisons
 import RPi.GPIO as GPIO  # Import RPi.GPIO for GPIO control
+import wave
+import struct
 
 # GPIO pin definitions
 GPIO_PIN_20 = 20
@@ -134,9 +136,40 @@ def open_doors():
         # Optional: Cleanup can be handled elsewhere if needed
         pass
 
-def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guests):
+def send_sdp_response(sock, address, via_headers, record_route_headers, to_header, from_header, call_id, cseq, sip_id, local_ip, local_port):
+    """Send a 200 OK response with SDP to establish the media session."""
+    to_tag = uuid.uuid4().hex
+    sdp = (
+        "v=0\r\n"
+        f"o=- {random.randint(1000,9999)} {random.randint(1000,9999)} IN IP4 {local_ip}\r\n"
+        "s=SIP Call\r\n"
+        f"c=IN IP4 {local_ip}\r\n"
+        "t=0 0\r\n"
+        "m=audio 9000 RTP/AVP 0\r\n"  # Using PCMU (Payload Type 0)
+        "a=rtpmap:0 PCMU/8000\r\n"
+        "a=sendrecv\r\n"
+    )
+
+    ok_response = (
+        f"SIP/2.0 200 OK\r\n"
+        + "\r\n".join(via_headers) + "\r\n"
+        + "\r\n".join(record_route_headers) + "\r\n"
+        + f"{to_header};tag={to_tag}\r\n"
+        + f"{from_header}\r\n"
+        + f"Call-ID: {call_id}\r\n"
+        + f"CSeq: {cseq} INVITE\r\n"
+        + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
+        f"Content-Type: application/sdp\r\n"
+        f"Content-Length: {len(sdp.encode())}\r\n\r\n"
+        f"{sdp}"
+    )
+    send_response(sock, ok_response, address)
+    logging.info(f"Sent 200 OK for Call-ID: {call_id}")
+    return to_tag, sdp
+
+def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, guests, rtp_info):
     """Handle an incoming INVITE request by sending a 180 Ringing response,
-    check if caller is on guest list, and if yes, open doors."""
+    check if caller is on guest list, and if yes, send 200 OK with SDP to initiate media."""
     logging.info(f"Handling INVITE from {address}")
 
     # Extract necessary headers from the INVITE message
@@ -190,16 +223,9 @@ def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, g
                     logging.error(f"Invalid datetime format for guest {guest_name}: {ve}")
             break  # Phone number matched, no need to continue
 
-    if is_guest_allowed:
-        logging.info(f"Caller {caller_number} is on the guest list and within the allowed time. Opening doors.")
-        # Start a new thread to open doors
-        door_thread = threading.Thread(target=open_doors, daemon=True)
-        door_thread.start()
-    else:
-        logging.info(f"Caller {caller_number} is not on the guest list or not within the allowed time.")
-
     # Extract the From header (full header)
-    from_header = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE).group(1) if re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE) else f"From: <sip:{caller_number}@unknown>;tag=unknown"
+    from_header_match = re.search(r'(From: .*?;tag=\S+)', invite_message, re.IGNORECASE)
+    from_header = from_header_match.group(1) if from_header_match else f"From: <sip:{caller_number}@unknown>;tag=unknown"
 
     # Extract the To header without tag
     to_match = re.search(r'(To: <sip:.*?>)', invite_message, re.IGNORECASE)
@@ -208,41 +234,146 @@ def handle_invite(sock, invite_message, address, sip_id, local_ip, local_port, g
         return
     to_header = to_match.group(1)
 
-    # Generate a unique tag for the To header
-    to_tag = uuid.uuid4().hex
+    if is_guest_allowed:
+        logging.info(f"Caller {caller_number} is on the guest list and within the allowed time. Preparing to answer the call.")        
+        # Start a new thread to open doors
+        door_thread = threading.Thread(target=open_doors, daemon=True)
+        door_thread.start()
+        
+        # Send 180 Ringing
+        ringing_response = (
+            f"SIP/2.0 180 Ringing\r\n"
+            + "\r\n".join(via_headers) + "\r\n"
+            + "\r\n".join(record_route_headers) + "\r\n"
+            + f"{to_header};tag=temporary\r\n"
+            + f"{from_header}\r\n"
+            + f"Call-ID: {call_id}\r\n"
+            + f"CSeq: {cseq} INVITE\r\n"
+            + f"Content-Length: 0\r\n\r\n"
+        )
+        send_response(sock, ringing_response, address)
+        logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
 
-    # Construct the 180 Ringing response
-    ringing_response = (
-        f"SIP/2.0 180 Ringing\r\n"
-        + "\r\n".join(via_headers) + "\r\n"
-        + "\r\n".join(record_route_headers) + "\r\n"
-        + f"{to_header};tag={to_tag}\r\n"
-        + f"{from_header}\r\n"
-        + f"Call-ID: {call_id}\r\n"
-        + f"CSeq: {cseq} INVITE\r\n"
-        + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
-        + f"Content-Length: 0\r\n\r\n"
-    )
-    send_response(sock, ringing_response, address)
-    logging.info(f"Sent 180 Ringing for Call-ID: {call_id}")
+        # Send 200 OK with SDP
+        to_tag, sdp = send_sdp_response(sock, address, via_headers, record_route_headers, to_header, from_header, call_id, cseq, sip_id, local_ip, local_port)
 
-    # Wait for 1 second before hanging up
-    # time.sleep(1)
+        # Extract media IP and port from SDP
+        media_match = re.search(r"c=IN\s+IP4\s+([\d\.]+)\r?\nm=audio\s+(\d+)\s+RTP/AVP\s+(\d+)", sdp, re.IGNORECASE)
+        if media_match:
+            media_ip = media_match.group(1)
+            media_port = int(media_match.group(2))
+            payload_type = media_match.group(3)
+            logging.info(f"Caller media IP: {media_ip}, Port: {media_port}, Payload Type: {payload_type}")
+            rtp_info['caller_ip'] = media_ip
+            rtp_info['caller_port'] = media_port
+        else:
+            logging.error("Failed to parse media information from SDP.")
+            return
 
-    # Construct the 487 Request Terminated response
-    terminated_response = (
-        f"SIP/2.0 487 Request Terminated\r\n"
-        + "\r\n".join(via_headers) + "\r\n"
-        + "\r\n".join(record_route_headers) + "\r\n"
-        + f"{to_header};tag={to_tag}\r\n"
-        + f"{from_header}\r\n"
-        + f"Call-ID: {call_id}\r\n"
-        + f"CSeq: {cseq} INVITE\r\n"
-        + f"Contact: <sip:{sip_id}@{local_ip}:{local_port}>\r\n"
-        + f"Content-Length: 0\r\n\r\n"
-    )
-    send_response(sock, terminated_response, address)
-    logging.info(f"Sent 487 Request Terminated for Call-ID: {call_id}")
+        # Store Call-ID and address for RTP streaming
+        rtp_info['call_id'] = call_id
+        rtp_info['caller_address'] = address
+
+        # Start a thread to monitor for ACK and initiate media streaming
+        threading.Thread(target=wait_for_ack_and_stream, args=(sock, rtp_info, local_ip), daemon=True).start()
+    else:
+        logging.info(f"Caller {caller_number} is not on the guest list or not within the allowed time.")
+        # Send 487 Request Terminated
+        terminated_response = (
+            f"SIP/2.0 487 Request Terminated\r\n"
+            + "\r\n".join(via_headers) + "\r\n"
+            + "\r\n".join(record_route_headers) + "\r\n"
+            + f"{to_header};tag=temporary\r\n"
+            + f"{from_header}\r\n"
+            + f"Call-ID: {call_id}\r\n"
+            + f"CSeq: {cseq} INVITE\r\n"
+            + f"Content-Length: 0\r\n\r\n"
+        )
+        send_response(sock, terminated_response, address)
+        logging.info(f"Sent 487 Request Terminated for Call-ID: {call_id}")
+
+def wait_for_ack_and_stream(sock, rtp_info, local_ip):
+    """Wait for ACK and then start sending RTP packets with audio."""
+    try:
+        while True:
+            try:
+                data, addr = sock.recvfrom(4096)
+                message = data.decode()
+                if message.startswith("ACK") and rtp_info.get('call_id') and rtp_info.get('call_id') in message:
+                    logging.info(f"Received ACK for Call-ID: {rtp_info.get('call_id')}")
+                    # Start RTP streaming
+                    caller_ip = rtp_info.get('caller_ip')
+                    caller_port = rtp_info.get('caller_port')
+                    if caller_ip and caller_port:
+                        threading.Thread(target=stream_rtp, args=(caller_ip, caller_port), daemon=True).start()
+                        logging.info("Initiated RTP streaming.")
+                    else:
+                        logging.error("Caller IP or port information is missing.")
+                    break
+            except socket.timeout:
+                continue
+    except Exception as e:
+        logging.error(f"Error in wait_for_ack_and_stream: {e}")
+
+def stream_rtp(caller_ip, caller_port):
+    """Stream the hello.wav audio file to the caller using RTP."""
+    try:
+        # Open the WAV file
+        with wave.open("hello.wav", "rb") as wf:
+            sample_rate = wf.getframerate()
+            num_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            n_frames = wf.getnframes()
+            audio_data = wf.readframes(n_frames)
+
+        logging.info(f"Audio file 'hello.wav' opened: {sample_rate}Hz, {num_channels} channels, {sampwidth*8}-bit.")
+
+        # Create RTP socket
+        rtp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # RTP parameters
+        seq_num = 0
+        timestamp = 0
+        ssrc = random.randint(0, 2**32 - 1)
+
+        # Packetization parameters
+        frame_duration = 20  # in ms
+        frames_per_packet = int(sample_rate * (frame_duration / 1000.0))
+        bytes_per_sample = sampwidth
+        bytes_per_frame = bytes_per_sample * num_channels
+        bytes_per_packet = bytes_per_frame * frames_per_packet
+
+        logging.info(f"Streaming RTP packets: {frames_per_packet} frames per {frame_duration}ms packet.")
+
+        # Start streaming
+        for i in range(0, len(audio_data), bytes_per_packet):
+            frame = audio_data[i:i+bytes_per_packet]
+            if len(frame) == 0:
+                break
+
+            # RTP header
+            rtp_header = struct.pack('!BBHII',
+                                     0x80,            # V=2, P=0, X=0, CC=0
+                                     0,               # M=0, Payload type=0 (PCMU)
+                                     seq_num & 0xFFFF,  # Sequence number
+                                     timestamp,       # Timestamp
+                                     ssrc)            # SSRC
+
+            rtp_packet = rtp_header + frame
+            rtp_socket.sendto(rtp_packet, (caller_ip, caller_port))
+            logging.debug(f"Sent RTP packet Seq={seq_num}, Timestamp={timestamp}")
+
+            seq_num += 1
+            timestamp += frames_per_packet
+
+            time.sleep(frame_duration / 1000.0)  # Wait for frame duration
+
+        rtp_socket.close()
+        logging.info("Completed RTP streaming.")
+    except FileNotFoundError:
+        logging.error("Audio file 'hello.wav' not found.")
+    except Exception as e:
+        logging.error(f"Error during RTP streaming: {e}")
 
 def registration_loop(sock, sip_server, sip_port, local_ip, local_port, call_id, sip_id, sip_password):
     """Continuously send REGISTER messages every 5 minutes."""
@@ -284,6 +415,7 @@ def registration_loop(sock, sip_server, sip_port, local_ip, local_port, call_id,
 
 def listening_loop(sock, sip_id, local_ip, local_port, guests):
     """Listen for incoming SIP messages and handle INVITE requests."""
+    rtp_info = {}
     while True:
         try:
             data, addr = sock.recvfrom(4096)
@@ -295,9 +427,14 @@ def listening_loop(sock, sip_id, local_ip, local_port, guests):
             logging.debug(f"Received message from {addr}:\n{message}")
 
             if message.startswith("INVITE"):
-                handle_invite(sock, message, addr, sip_id, local_ip, local_port, guests)
+                handle_invite(sock, message, addr, sip_id, local_ip, local_port, guests, rtp_info)
+            elif message.startswith("ACK") and rtp_info.get('call_id') and rtp_info.get('call_id') in message:
+                logging.info(f"Received ACK for Call-ID: {rtp_info.get('call_id')}")
+                # ACK handling is now managed in wait_for_ack_and_stream
             else:
                 logging.info(f"Ignoring unsupported SIP method from {addr}.")
+        except socket.timeout:
+            continue
         except Exception as e:
             logging.error(f"An error occurred while listening for messages: {e}")
 
@@ -379,3 +516,4 @@ def main(port, verbose):
 
 if __name__ == '__main__':
     main()
+
